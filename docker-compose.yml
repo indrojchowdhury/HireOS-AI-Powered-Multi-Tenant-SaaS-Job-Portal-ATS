@@ -1,0 +1,119 @@
+services:
+
+  # PostgreSQL Database
+  db:
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_DB: hireos_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: admin
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - hireos_network
+
+  # Redis Broker
+  redis:
+    image: redis:latest
+    restart: always
+    ports:
+      - "6379:6379"
+    networks:
+      - hireos_network
+
+  # Django Web Server (Backend)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: >
+      sh -c "python manage.py migrate &&
+             python manage.py runserver 0.0.0.0:9000"
+    volumes:
+      - ./backend:/app
+      - media_data:/app/media
+    ports:
+      - "9000:9000"
+    env_file:
+      - ./backend/.env
+    environment:
+      - DB_HOST=db
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      - db
+      - redis
+    networks:
+      - hireos_network
+
+  # Celery Worker (Backend)
+  celery:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: celery -A core worker --loglevel=info
+    volumes:
+      - ./backend:/app
+      - media_data:/app/media
+    env_file:
+      - ./backend/.env
+    environment:
+      - DB_HOST=db
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      - db
+      - redis
+      - backend
+    networks:
+      - hireos_network
+
+  # Celery Beat (Backend)
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: celery -A core beat --loglevel=info
+    volumes:
+      - ./backend:/app
+    env_file:
+      - ./backend/.env
+    environment:
+      - DB_HOST=db
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      - db
+      - redis
+      - backend
+    networks:
+      - hireos_network
+
+  # React Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_BASE_URL=http://backend:9000
+    depends_on:
+      - backend
+    networks:
+      - hireos_network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  media_data:
+
+networks:
+  hireos_network:
+    driver: bridge
